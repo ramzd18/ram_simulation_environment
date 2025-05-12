@@ -85,82 +85,9 @@ def get_batch(config: TrainingConfig):
         return None
     return response.json()["data"]
 
-def process_conversation_data(conversation_data):
-    # Fix this later 
-    tokens, masks, scores = [], [], []
-    
-    for conv, rewards, char1, char2, scenario in conversation_data:
-        conversation_tokens = []
-        conversation_masks = []
-        conversation_scores = []
-        
-        for message in conv:
-            # Tokenize message and create masks
-            # Add to conversation_tokens, conversation_masks
-            pass
-            
-        # Add rewards to scores
-        conversation_scores = [rewards.get("score", 0.0) for _ in conv]
-        
-        tokens.extend(conversation_tokens)
-        masks.extend(conversation_masks)
-        scores.extend(conversation_scores)
-    
-    return {
-        "tokens": tokens,
-        "masks": masks,
-        "scores": scores,
-        "overrides": None  # Add if needed
-    }
 
 
-def pad_data_to_good_offset(data, batch_size: int):
-    """Pad and prepare data for training"""
-    max_token_len = max([max([len(x) for x in item["tokens"]]) for item in data["batch"]])
-    good_multiple = 64
-    if (max_token_len - 1) % good_multiple != 0:
-        max_token_len = math.ceil((max_token_len - 1) / good_multiple) * good_multiple
-        token_setup_len = max_token_len + 1
-    else:
-        token_setup_len = max_token_len
-        max_token_len = max_token_len - 1
 
-    input_ids, labels, advantages = [], [], []
-    lengths = []
-    
-    for item in data["batch"]:
-        scores = np.array(item["scores"])
-        if len(scores) > 1:
-            scores = scores - scores.mean()
-            scores = scores / max(scores.std(), 1e-8)
-        item["scores"] = scores
-        
-        if item["overrides"] is not None:
-            for i in range(len(item["overrides"])):
-                if item["overrides"][i].get("set_advantage_to_zero", False):
-                    item["scores"][i] = 0
-
-        for i in range(len(item["tokens"])):
-            lengths.append(math.ceil((len(item["tokens"][i]) - 1) / good_multiple) * good_multiple)
-            label_item = np.concatenate([
-                np.array(item["masks"][i]),
-                np.full(max(0, token_setup_len - len(item["tokens"][i])), -100, dtype=np.int32)
-            ])
-            item["tokens"][i] = np.concatenate([
-                np.array(item["tokens"][i]),
-                np.zeros(max(0, token_setup_len - len(item["tokens"][i])), dtype=np.int32)
-            ])
-            input_ids.append(item["tokens"][i][:-1])
-            labels.append(label_item[1:])
-            advantages.append(item["scores"][i])
-
-    token_batches, label_batches, advantage_batches = [], [], []
-    for i in range(len(input_ids) // batch_size):
-        token_batches.append(torch.tensor(np.stack(input_ids[i * batch_size:(i + 1) * batch_size], axis=0)))
-        label_batches.append(torch.tensor(np.stack(labels[i * batch_size:(i + 1) * batch_size], axis=0)))
-        advantage_batches.append(torch.tensor(np.stack(advantages[i * batch_size:(i + 1) * batch_size], axis=0)).view(-1, 1))
-
-    return token_batches, label_batches, advantage_batches
 
 def register_trainer(config: TrainingConfig):
     """Register trainer with API"""
@@ -192,6 +119,59 @@ def load_initial_model(config: TrainingConfig):
     model.gradient_checkpointing_enable()
     model.train()
     return model, tokenizer
+
+def tokenize_pad_data(data, tokenizer, model):
+    tokenized_data_list = []
+    for data_point in data:
+        scenario, character1, character2, conversation, rewards = data_point
+        initial_prefix = f"Scenario: {scenario} \n Character 1 Description: {character1} \n Character 2 Description: {character2}"
+        
+        # Tokenize initial prefix
+        # tokenized_initial_prefix = tokenizer.apply_chat_template(initial_prefix)    
+            
+        tokenized_list = []        
+        for message in conversation:
+            tokenized_message = tokenizer.apply_chat_template(message["text"])
+            tokenized_list.append(tokenized_message)
+        all_input_ids =[m["input_ids"] for m in tokenized_list]
+        padded_tokens = tokenizer.pad(
+            {"input_ids": all_input_ids},
+            padding=True,
+            return_tensors="pt"
+        )
+        
+        tokenized_data_list.append(padded_tokens)
+        
+    return tokenized_data_list
+def genreate_logits_tokenized_data(tokenized_data_list,model):
+    log_probs_total= []
+    labels_total= []
+    for tokenized_data in tokenized_data_list:
+        batch_size, seq_len = tokenized_data["input_ids"].shape
+        logits = model(input_ids=tokenized_data["input_ids"], attention_mask=tokenized_data["attention_mask"]).logits
+        log_probs = F.log_softmax(logits, dim=-1)
+        log_probs = log_probs.view(batch_size, seq_len, -1)
+        log_probs = log_probs[:, :-1, :].contiguous()
+        labels = tokenized_data["input_ids"][:, 1:].contiguous()
+        log_probs_total = torch.cat([log_probs_total,log_probs], dim=0)
+        labels_total = torch.cat([labels_total,labels], dim=0)
+    return log_probs_total, labels_total
+
+def calculate_advantage_for_data_point(rewards):
+    advantages = []
+    for reward in rewards:
+        advantage = reward - rewards[0]
+        advantages.append(advantage)
+    return advantages
+
+        
+
+
+
+
+
+
+
 
 
 def train(config: TrainingConfig):
@@ -241,7 +221,12 @@ def train(config: TrainingConfig):
                         start_collection(config)
 
             print(f"Step {step+1}/{config.training_steps}")
-            
+            for batch in batches: 
+
+
+
+                # token_batches, label_batches, advantage_batches = pad_data_to_good_offset(batch, config.batch_size)
+
             
             # for tokens, labels, advantages in zip(token_batches, label_batches, advantage_batches):
             #     tokens = tokens.to(config.device)
