@@ -3,6 +3,18 @@ from typing import Optional, Tuple, List
 import aiohttp
 import asyncio
 import random
+from abc import ABC, abstractmethod
+from typing import Optional, Tuple, List
+import time
+class MyBaseEnv(ABC):
+    @abstractmethod
+    async def setup(self) -> None: ...
+    @abstractmethod
+    async def get_next_item(self) -> Optional[any]: ...
+    @abstractmethod
+    async def collect_trajectories(self, item) -> List[Tuple[str, str, str, List[dict], dict]]: ...
+    @abstractmethod
+    async def generate_rewards(self, conversation, character1, character2, scenario) -> dict: ...
 
 class SimulationEnvironment(MyBaseEnv):
     def __init__(self, server_url: str, vllm_server_url: str):
@@ -10,9 +22,10 @@ class SimulationEnvironment(MyBaseEnv):
         self.vllm_server_url = vllm_server_url
         self.customer_personas = None
         self.character_codex = None
+        # List[List[Tuple[str, str, str, List[dict], dict]]]        
         self.current_batch = []
         self.session = None
-
+        self.batch_size = 100
     async def setup(self) -> None:
         # Load datasets
         self.customer_personas = load_dataset("CordwainerSmith/CustomerPersonas", split="train").shuffle(seed=42).select(range(6000))
@@ -26,35 +39,34 @@ class SimulationEnvironment(MyBaseEnv):
                 raise Exception("Failed to setup server")
 
     async def get_next_item(self) -> Optional[any]:
-        if self.current_batch:
-            if self.cutomer_idx >= len(self.customer_personas):
-                character = self.character_codex[self.character_idx]
-                self.character_idx += 1
-                return self._generate_character_scenario(character)
-            elif self.character_idx >= len(self.character_codex):
-                persona = self.customer_personas[self.cutomer_idx]
-                self.cutomer_idx += 1
-                return self._generate_customer_scenario(persona)
-            
+        if self.cutomer_idx >= len(self.customer_personas) and self.character_idx >= len(self.character_codex):
+            return None
+
+        if self.cutomer_idx < len(self.customer_personas) and (self.character_idx >= len(self.character_codex)):
+            persona = self.customer_personas[self.cutomer_idx]
+            self.cutomer_idx += 1
+            return await self._generate_customer_scenario(persona)
+
+        if self.character_idx < len(self.character_codex) and (self.cutomer_idx >= len(self.customer_personas)):
+            character = self.character_codex[self.character_idx]
+            self.character_idx += 1
+            return await self._generate_character_scenario(character)
+
+        if self.cutomer_idx < len(self.customer_personas) and self.character_idx < len(self.character_codex):
             if random.random() < 0.5:
                 persona = self.customer_personas[self.cutomer_idx]
                 self.cutomer_idx += 1
-                scenario = self._generate_customer_scenario(persona)
+                return await self._generate_customer_scenario(persona)
             else:
                 character = self.character_codex[self.character_idx]
                 self.character_idx += 1
-                scenario = self._generate_character_scenario(character)
-            
-            return scenario
-        return None
+                return await self._generate_character_scenario(character)
 
-    async def collect_trajectories(self) -> Tuple[any, List[any]]:
+        return ""
+
+    async def collect_trajectories(self,character1, character2) -> Tuple[any, List[any]]:
         all_conversations = []
-        character1 = self.get_next_item()
-        character2 = self.get_next_item()
-        scenario = self.generate_character_scenario(character1, character2)
-        
-        # Run 4 separate conversations for GRPO
+        scenario = await self.generate_character_scenario(character1, character2)
         for conversation_num in range(4):
             conversation = []
             for _ in range(random.randint(5, 7)):
@@ -90,32 +102,125 @@ class SimulationEnvironment(MyBaseEnv):
                         char2_response = await response.json()
                         conversation.append({"speaker": "character2", "text": char2_response["text"]})
 
-            # Add completed conversation to list
-            all_conversations.append(conversation)
+            # Conversation is type List[dict]
+            all_conversations.append((scenario, character1, character2, conversation))
+        final_output= []
+        for scenario,character1,character2, conversation in all_conversations:
+            rewards = await self.generate_rewards(conversation, character1, character2, scenario)
+            final_output.append((scenario,character1,character2, conversation, rewards))
+        # final_output is type List[Tuple[str, str, str, List[dict], List[dict]]]
+        self.current_batch.append(final_output)
+        await self.check_batch()
+        return final_output
 
-        # Send all conversations to collection server at once
-        async with self.session.post(
-            f"{self.server_url}/collect",
-            json={"scenario": scenario, "conversations": all_conversations}
-        ) as response:
-            if response.status != 200:
-                return scenario, []
 
-        return scenario, all_conversations
+    async def check_batch(self): 
+        if len(self.current_batch) >= self.batch_size:
+            async with self.session.post(
+                f"{self.server_url}/collect",
+                json={"batch": self.current_batch}
+            ) as response:
+                if response.status != 200:
+                    raise Exception("Failed to collect batch")
+            self.current_batch = []
 
-    async def evaluate(self) -> float:
-        # Get accumulated conversations from server
-        async with self.session.post(f"{self.server_url}/dispatch") as response:
-            if response.status == 200:
-                data = await response.json()
-                conversations = data.get("queue", [])
-                
-                # Simple evaluation metric: average conversation length
-                if conversations:
-                    return sum(len(conv) for conv in conversations) / len(conversations)
-        return 0.0
     
 
+    async def generate_rewards(self, conversation, character1, character2, scenario):
+        # Generate terminal rewards for each character
+        terminal_prompt = f"""Given this conversation: {conversation}
+        And this scenario: {scenario}
+        And these characters:
+        Character 1: {character1}
+        Character 2: {character2}
+        
+        Evaluate both characters' performance based on these criteria:
+        1. How authentic their responses were to their character (0-40 points)
+        2. How interesting and engaging their contributions were (0-30 points)
+        3. How accurate their responses were throughout the history of the conversation (0-30 points)
+
+        Return only a JSON with fields:
+        - character1_authenticity: Score for character 1's authenticity (0-40)
+        - character1_engagement: Score for character 1's engagement (0-30)
+        - character1_accuracy: Score for character 1's accuracy (0-30)
+        - character2_authenticity: Score for character 2's authenticity (0-40)
+        - character2_engagement: Score for character 2's engagement (0-30) 
+        - character2_accuracy: Score for character 2's accuracy (0-30)
+        - character1_feedback: Brief explanation of character 1's scores
+        - character2_feedback: Brief explanation of character 2's scores"""
+
+        async with self.session.post(
+            f"{self.vllm_server_url}/generate",
+            json={
+                "prompt": terminal_prompt,
+                "max_tokens": 500,
+                "temperature": 0.3
+            }
+        ) as response:
+            terminal_rewards = {
+                "character1": {
+                    "authenticity": 0,
+                    "engagement": 0,
+                    "accuracy": 0
+                },
+                "character2": {
+                    "authenticity": 0,
+                    "engagement": 0,
+                    "accuracy": 0
+                }
+            }
+            if response.status == 200:
+                result = await response.json()
+                scores = result.get("text", {})
+                terminal_rewards["character1"]["authenticity"] = scores.get("character1_authenticity", 0)
+                terminal_rewards["character1"]["engagement"] = scores.get("character1_engagement", 0)
+                terminal_rewards["character1"]["accuracy"] = scores.get("character1_accuracy", 0)
+                terminal_rewards["character2"]["authenticity"] = scores.get("character2_authenticity", 0)
+                terminal_rewards["character2"]["engagement"] = scores.get("character2_engagement", 0)
+                terminal_rewards["character2"]["accuracy"] = scores.get("character2_accuracy", 0)
+
+        # Generate per-utterance scores
+        utterance_scores = []
+        for utterance in conversation:
+            utterance_prompt = f"""Given this conversation utterance: {utterance}
+            And the full conversation context: {conversation}
+            
+            Score this utterance on a scale of 0-10 based on:
+            1. How engaging and interesting the response is (0-5 points)
+            2. How directly it addresses previous points in the conversation (0-5 points)
+
+            Return only a JSON with fields:
+            - score: The numerical score (0-10)
+            - feedback: Brief explanation of score"""
+
+            async with self.session.post(
+                f"{self.vllm_server_url}/generate",
+                json={
+                    "prompt": utterance_prompt,
+                    "max_tokens": 200,
+                    "temperature": 0.3
+                }
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    score_data = result.get("text", {})
+                    utterance_scores.append({
+                        "speaker": utterance["speaker"],
+                        "score": score_data.get("score", 0),
+                        "feedback": score_data.get("feedback", "")
+                    })
+                else:
+                    utterance_scores.append({
+                        "speaker": utterance["speaker"],
+                        "score": 0,
+                        "feedback": "Failed to generate score"
+                    })
+
+        return {
+            "terminal_rewards": terminal_rewards,
+            "utterance_scores": utterance_scores
+        }
+        
     # TODO: Wrap this in an instructor call to get valid json
     async def generate_character_scenario(self,character1, character2): 
         prompt = f"""Given these two characters, suggest a specific, focused topic for them to have an in-depth discussion about. 
@@ -153,7 +258,7 @@ class SimulationEnvironment(MyBaseEnv):
             return None
 
 
-    def _generate_customer_scenario(self, persona):
+    async def _generate_customer_scenario(self, persona):
         scenario = {
             "name": f"{persona['first_name']} {persona['last_name']}",
             "background": persona["generated_persona"],
@@ -164,7 +269,7 @@ class SimulationEnvironment(MyBaseEnv):
             "interests": persona["interests"],
             "state_of_mind": persona["state_of_mind"],
         }
-        return  self.enrich_customer_persona(scenario)
+        return  await self.enrich_customer_persona(scenario)
     
     async def enrich_customer_persona(self, persona):
         # Prepare the prompt for vLLM to generate a hyperrealistic profile
@@ -203,12 +308,12 @@ class SimulationEnvironment(MyBaseEnv):
                 enriched_profile = result.get("text", "").strip()
                 return enriched_profile
 
-    def _generate_character_scenario(self, character):
+    async def _generate_character_scenario(self, character):
         scenario = {
             "name": character.get("character_name", "Yilin"),
             "background": character.get("description", "Yilin is a young nun from the Hengshan Sect in Jin Yong's novel \"The Smiling, Proud Wanderer.\" Known for her innocence and kindness, she becomes friends with the protagonist Linghu Chong. Her gentle nature often puts her at odds with the violent world of martial arts."),
         }
-        return self.enrich_character_scenario(scenario)
+        return await self.enrich_character_scenario(scenario)
     async def enrich_character_scenario(self, character):
         # Prepare the prompt for vLLM to generate a detailed character profile
         prompt = f"""Given the following basic character information, create an extremely detailed and rich character profile that makes this character feel like a real person. Include specific details about their personality, motivations, and background that would influence how they interact with others.
@@ -245,3 +350,43 @@ class SimulationEnvironment(MyBaseEnv):
     async def __del__(self):
         if self.session:
             await self.session.close()
+    async def check_status_env(self):
+        async with self.session.get(f"{self.server_url}/status") as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                raise Exception("Failed to check server status")
+
+
+if __name__ == "__main__":
+    env = SimulationEnvironment("http://localhost:8000", "http://localhost:8001")
+    asyncio.run(env.setup())
+    while True: 
+        can_sample = asyncio.run(env.check_status_env())
+        can_sample_value = False 
+        if can_sample.status==200:
+            can_sample_value = can_sample.get('can_sample', False)
+        if not can_sample_value:
+            time.sleep(5)
+            continue
+        none_counter=0
+        for _ in range(env.batch_size):
+            character_1 = asyncio.run(env.get_next_item())
+            character_2 = asyncio.run(env.get_next_item())
+            if character_1 or character_2 is '':
+                break
+            if character_1 and character_2 is None: 
+                none_counter+=1
+                if none_counter > 10: 
+                    break
+                continue
+            else: 
+                none_counter=0
+            
+            asyncio.run(env.collect_trajectories(character_1, character_2))
+        
+            
+
+    asyncio.run(env.check_batch())
+    print("DONE")
+
