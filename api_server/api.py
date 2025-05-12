@@ -50,6 +50,7 @@ async def collect(items: List[List[Tuple[str, str, str, List[dict], dict]]]):
             
             # After collecting, set should_collect to False
             should_collect = False
+            active_collection = False
             return jsonify({"status": "success", "message": "Items collected"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

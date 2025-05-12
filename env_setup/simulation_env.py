@@ -370,23 +370,24 @@ if __name__ == "__main__":
             time.sleep(5)
             continue
         none_counter=0
+        exit_flag= False
         for _ in range(env.batch_size):
             character_1 = asyncio.run(env.get_next_item())
             character_2 = asyncio.run(env.get_next_item())
             if character_1 or character_2 is '':
+                exit_flag= True
                 break
             if character_1 and character_2 is None: 
                 none_counter+=1
                 if none_counter > 10: 
+                    exit_flag= True
                     break
                 continue
             else: 
                 none_counter=0
-            
-            asyncio.run(env.collect_trajectories(character_1, character_2))
+        if exit_flag:
+            break
+        asyncio.run(env.collect_trajectories(character_1, character_2))
         
-            
-
-    asyncio.run(env.check_batch())
     print("DONE")
 
