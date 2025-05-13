@@ -1,0 +1,9 @@
+numpy
+requests
+torch
+wandb
+pydantic
+transformers
+flask
+datasets
+aiohttp

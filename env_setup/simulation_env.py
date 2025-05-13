@@ -380,7 +380,7 @@ if __name__ == "__main__":
         for _ in range(env.batch_size):
             character_1 = asyncio.run(env.get_next_item())
             character_2 = asyncio.run(env.get_next_item())
-            if character_1 or character_2 is '':
+            if character_1 or character_2 == '':
                 exit_flag= True
                 break
             if character_1 and character_2 is None: 
