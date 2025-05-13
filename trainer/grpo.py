@@ -52,7 +52,7 @@ class TrainingConfig(BaseModel):
     save_path: str = Field("trained_model_checkpoints", description="Checkpoint save path")
     vllm_restart_interval: int = Field(3, description="vLLM restart interval")
     vllm_port: int = Field(8001, description="vLLM server port")
-    api_port: int = Field(5000, description="API server port")
+    api_port: int = Field(8000, description="API server port")
     use_wandb: bool = Field(False, description="Enable wandb logging")
     wandb_project: Optional[str] = Field(None, description="Wandb project name")
     wandb_group: Optional[str] = Field(None, description="Wandb group name")
@@ -334,7 +334,7 @@ if __name__ == "__main__":
         model_name="Qwen/Qwen2.5-1.5B-Instruct",
         training_steps=20,
         vllm_restart_interval=3,
-        api_port=5000,  # Add API port
+        api_port=8000,  # Add API port
         use_wandb=True,
         wandb_project="grpo-trainer-example",
     )

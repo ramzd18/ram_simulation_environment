@@ -361,25 +361,23 @@ class SimulationEnvironment(MyBaseEnv):
             else:
                 raise Exception("Failed to check server status")
 
-
-if __name__ == "__main__":
+async def main():
     env = SimulationEnvironment("http://localhost:8000", "http://localhost:8001")
     print("Setting up environment")
-    asyncio.run(env.setup())
+    await env.setup()
     print("Setup complete")
-    while True: 
-        can_sample = asyncio.run(env.check_status_env())
+    while True:
+        can_sample = await env.check_status_env()
         can_sample_value = False 
-        if can_sample.status==200:
-            can_sample_value = can_sample.get('can_sample', False)
+        can_sample_value = can_sample.get('can_sample', False)
         if not can_sample_value:
-            time.sleep(10)
+            await asyncio.sleep(10)
             continue
         none_counter=0
         exit_flag= False
         for _ in range(env.batch_size):
-            character_1 = asyncio.run(env.get_next_item())
-            character_2 = asyncio.run(env.get_next_item())
+            character_1 = await env.get_next_item()
+            character_2 = await env.get_next_item()
             if character_1 or character_2 == '':
                 exit_flag= True
                 break
@@ -393,8 +391,10 @@ if __name__ == "__main__":
                 none_counter=0
         if exit_flag:
             break
-        asyncio.run(env.collect_trajectories(character_1, character_2))
+        await env.collect_trajectories(character_1, character_2)
     requests.post(f"{env.server_url}/notify_teardown", timeout=10)
-
     print("DONE")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
