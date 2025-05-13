@@ -8,26 +8,26 @@ poll_size = 100
 queue_lock = threading.Lock()
 should_collect = False 
 active_collection=False
+teardown_flag = False
 
 @app.route('/setup', methods=['POST'])
 async def setup_env():
     try:
-        global queue, should_collect
+        global queue, should_collect, active_collection, teardown_flag
         should_collect = False
+        active_collection = False
+        teardown_flag = False
         queue = Queue() 
         return jsonify({"status": "success", "message": "Server setup complete"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/start_collection', methods=['POST'])
-async def start_collection():
+def start_collection():
     try:
         global should_collect
-        global active_collection
-        with queue_lock:
-            should_collect = True
-            active_collection = True
-            return jsonify({
+        should_collect = True
+        return jsonify({
                 "status": "success", 
                 "message": "Collection started"
             })
@@ -41,12 +41,7 @@ async def collect(items: List[List[Tuple[str, str, str, List[dict], dict]]]):
     try:
         with queue_lock:
             for group in items:
-                conversation = (conversation for _, _, _, conversation, _ in group)
-                rewards = (rewards for _, _, _, _, rewards in group)
-                character1 = (character1 for _, character1, _, _, _ in group)
-                character2 = (character2 for _, _, character2, _, _ in group)
-                scenario = (scenario for scenario, _, _, _, _ in group)
-                queue.put((conversation, rewards, character1, character2, scenario))
+                queue.put(group)
             
             # After collecting, set should_collect to False
             should_collect = False
@@ -81,6 +76,7 @@ async def reload_model():
                 remaining_data.append(queue.get(0))
             
             should_collect = False 
+            active_collection = False
             
             return jsonify({
                 "status": "success", 
@@ -105,13 +101,28 @@ async def check_status_env():
 async def check_status_collection():
     try:
         with queue_lock:
+            if should_collect:
+                global active_collection
+                active_collection = True
             return jsonify({
                 "status": "ready", 
                 "can_sample": active_collection,     
             })
+        
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    
 
+@app.route('/notify_teardown', methods=['POST'])
+def notify_teardown():
+    global teardown_flag
+    teardown_flag = True
+    return jsonify({"status": "success", "message": "Teardown notified"})
+
+@app.route('/check_teardown', methods=['GET'])
+def check_teardown():
+    global teardown_flag
+    return jsonify({"status": "success", "message": teardown_flag})
 
 if __name__ == '__main__':
     app.run(debug=True)

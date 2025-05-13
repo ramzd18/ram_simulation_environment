@@ -5,6 +5,7 @@ import asyncio
 import random
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, List
+import requests
 import time
 class MyBaseEnv(ABC):
     @abstractmethod
@@ -26,6 +27,8 @@ class SimulationEnvironment(MyBaseEnv):
         self.current_batch = []
         self.session = None
         self.batch_size = 100
+        self.cutomer_idx=None
+        self.character_idx=None
     async def setup(self) -> None:
         # Load datasets
         self.customer_personas = load_dataset("CordwainerSmith/CustomerPersonas", split="train").shuffle(seed=42).select(range(6000))
@@ -69,7 +72,8 @@ class SimulationEnvironment(MyBaseEnv):
         scenario = await self.generate_character_scenario(character1, character2)
         for conversation_num in range(4):
             conversation = []
-            for _ in range(random.randint(5, 7)):
+            samped_number = random.randint(5, 7)
+            for _ in range(samped_number):
                 char1_prompt = f"""Given the scenario: {scenario}
                 And the conversation history: {conversation}
                 Generate the next response for character 1: {character1}"""
@@ -118,7 +122,7 @@ class SimulationEnvironment(MyBaseEnv):
         if len(self.current_batch) >= self.batch_size:
             async with self.session.post(
                 f"{self.server_url}/collect",
-                json={"batch": self.current_batch}
+                json={"items": self.current_batch}
             ) as response:
                 if response.status != 200:
                     raise Exception("Failed to collect batch")
@@ -360,14 +364,16 @@ class SimulationEnvironment(MyBaseEnv):
 
 if __name__ == "__main__":
     env = SimulationEnvironment("http://localhost:8000", "http://localhost:8001")
+    print("Setting up environment")
     asyncio.run(env.setup())
+    print("Setup complete")
     while True: 
         can_sample = asyncio.run(env.check_status_env())
         can_sample_value = False 
         if can_sample.status==200:
             can_sample_value = can_sample.get('can_sample', False)
         if not can_sample_value:
-            time.sleep(5)
+            time.sleep(10)
             continue
         none_counter=0
         exit_flag= False
@@ -388,6 +394,7 @@ if __name__ == "__main__":
         if exit_flag:
             break
         asyncio.run(env.collect_trajectories(character_1, character_2))
-        
+    requests.post(f"{env.server_url}/notify_teardown", timeout=10)
+
     print("DONE")
 
