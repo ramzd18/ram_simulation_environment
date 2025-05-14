@@ -21,9 +21,10 @@ pkill -f 'python .*/api_server/api.py'            || true
 pkill -f 'python .*/env_setup/simulation_env.py'  || true
 pkill -f 'vllm\.entrypoints\.openai\.api_server'  || true
 
-# wait up to 5s for port 8001 to free
+# wait up to 5s for both ports to free
+echo "→ Waiting for ports to be available..."
 for i in {1..10}; do
-  if ! ss -ltnp 2>/dev/null | grep -q ':8001'; then
+  if ! ss -ltnp 2>/dev/null | grep -q ':8000' && ! ss -ltnp 2>/dev/null | grep -q ':5000'; then
     break
   fi
   sleep 0.5
@@ -38,9 +39,9 @@ python api.py &
 API_PID=$!
 popd >/dev/null
 
-# wait for port 8000 to be listening
+# wait for port 8001 to be listening (API port)
 for i in {1..10}; do
-  if ss -ltnp 2>/dev/null | grep -q ':8000'; then
+  if ss -ltnp 2>/dev/null | grep -q ':5000'; then
     echo "→ api.py is up"
     break
   fi

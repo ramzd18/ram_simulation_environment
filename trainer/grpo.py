@@ -53,8 +53,8 @@ class TrainingConfig(BaseModel):
     device: str = Field("cuda" if torch.cuda.is_available() else "cpu", description="Training device")
     save_path: str = Field("trained_model_checkpoints", description="Checkpoint save path")
     vllm_restart_interval: int = Field(3, description="vLLM restart interval")
-    vllm_port: int = Field(8001, description="vLLM server port")
-    api_port: int = Field(8000, description="API server port")
+    vllm_port: int = Field(8000, description="vLLM server port")
+    api_port: int = Field(5000, description="API server port")
     use_wandb: bool = Field(False, description="Enable wandb logging")
     wandb_project: Optional[str] = Field(None, description="Wandb project name")
     wandb_group: Optional[str] = Field(None, description="Wandb group name")
@@ -190,7 +190,7 @@ def train(config: TrainingConfig):
 
     os.makedirs(config.save_path, exist_ok=True)
     # register_trainer(config)
-
+    print("THIS IS THE VLLM PORT", config.vllm_port)
     vllm_command = [
         "python", "-m", "vllm.entrypoints.openai.api_server",
         "--model", config.model_name,
@@ -202,11 +202,11 @@ def train(config: TrainingConfig):
     client = None
     try:
         vllm_process = subprocess.Popen(vllm_command)
-        url = f"http://localhost:{config.vllm_port}/status"
+        url = f"http://localhost:{config.vllm_port}/health"
         while True:
             response = requests.get(url)
             if response.status_code == 200:
-                time.sleep(10)
+                time.sleep(20)
                 break
             time.sleep(5)
         print(f"vLLM server launched with PID: {vllm_process.pid}")
@@ -217,7 +217,7 @@ def train(config: TrainingConfig):
     start_collection(config)
 
     while True: 
-        check_teardown= requests.get("http://localhost:8000/check_teardown")
+        check_teardown= requests.get("http://localhost:5000/check_teardown")
         if check_teardown.json()["message"]:
             break
         for step in range(config.training_steps):
@@ -344,8 +344,9 @@ if __name__ == "__main__":
         model_name="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
         training_steps=20,
         vllm_restart_interval=3,
-        api_port=8000,  # Add API port
+        api_port=5000,  
+        vllm_port=8000,
         use_wandb=True,
-        wandb_project="grpo-trainer-example",
+        # wandb_project="grpo-trainer-example",
     )
     train(training_config)

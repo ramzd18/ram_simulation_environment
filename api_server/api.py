@@ -87,7 +87,7 @@ async def reload_model():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/status', methods=['GET']) 
+@app.route('/status_check', methods=['GET']) 
 async def check_status_env():
     try:
         with queue_lock:
@@ -128,4 +128,4 @@ def check_teardown():
 
 if __name__ == '__main__':
     # app.run(debug=True)
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

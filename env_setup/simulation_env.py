@@ -348,14 +348,14 @@ class SimulationEnvironment(MyBaseEnv):
         if self.session:
             await self.session.close()
     async def check_status_env(self):
-        async with self.session.get(f"{self.server_url}/status") as response:
+        async with self.session.get(f"{self.server_url}/status_check") as response:
             if response.status == 200:
                 return await response.json()
             else:
                 raise Exception("Failed to check server status")
 
 async def main():
-    env = SimulationEnvironment("http://localhost:8000", "http://localhost:8001")
+    env = SimulationEnvironment("http://localhost:5000", "http://localhost:8000")
     print("Setting up environment")
     await env.setup()
     print("Setup complete")
@@ -365,12 +365,12 @@ async def main():
         if not can_sample_value:
             await asyncio.sleep(10)
             continue
-        client = instructor.from_openai(OpenAI(base_url="http://localhost:8001",api_key="ollama"),mode=instructor.Mode.JSON)
         try:
-            status_response = requests.get("http://localhost:8001/status", timeout=5)
+            status_response = requests.get("http://localhost:8000/health", timeout=5)
             if status_response.status_code == 200:
+                print("VLLM server GOOD TO GO")
                 try:
-                    test_response = requests.post("http://localhost:8001/v1/completions", 
+                    test_response = requests.post("http://localhost:8000/v1", 
                         json={
                             "model": "NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                             "prompt": "Hello, how are you?",
@@ -391,6 +391,8 @@ async def main():
             print("Could not connect to vLLM server") 
             await asyncio.sleep(10)
             continue
+        client = instructor.from_openai(OpenAI(base_url=env.vllm_server_url+"/v1",api_key="ollama"),mode=instructor.Mode.JSON)
+
         if client:
             env.client = client
         else: 
