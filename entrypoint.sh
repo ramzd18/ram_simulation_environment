@@ -1,53 +1,33 @@
-# #!/usr/bin/env bash
-# set -euo pipefail
-
-# echo "→ Starting api.py…"
-# cd api_server
-# python api.py &
-# API_PID=$!
-
-# # (Optional) wait for the API to finish booting before kicking off the next script
-# sleep 3
-# cd ..
-
-# echo "→ Starting simulation_env.py…"
-# cd env_setup
-# python simulation_env.py &
-# SIM_PID=$!
-
-
-# # (Optional) wait for your simulator to initialize
-# sleep 3
-# cd ..
-
-# echo "→ Starting grpo.py…"
-# cd trainer
-# python grpo.py
-# GRPO_EXIT=$?
-
-# echo "→ grpo.py exited with code $GRPO_EXIT; shutting down background processes…"
-# kill $API_PID $SIM_PID || true
-
-# exit $GRPO_EXIT
-
 #!/usr/bin/env bash
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Cleanup: kill all child processes on any exit (error, Ctrl-C, or normal)
+# Cleanup: kill all child and known grand-child processes on any exit
 # -----------------------------------------------------------------------------
 cleanup() {
-  echo "→ Cleaning up child processes…"
+  echo "→ Cleaning up all child processes…"
+  # kill direct children
   pkill -P $$ || true
+  # also kill any leftover vLLM servers
+  pkill -f 'vllm\.entrypoints\.openai\.api_server' || true
 }
 trap cleanup EXIT
 
 # -----------------------------------------------------------------------------
-# 1) Ensure no stale API or sim processes are running
+# 1) Ensure no stale API, sim or vLLM processes are running
 # -----------------------------------------------------------------------------
-echo "→ Killing any old api.py or simulation_env.py processes…"
-pkill -f 'python .*/api_server/api.py'   || true
-pkill -f 'python .*/env_setup/simulation_env.py' || true
+echo "→ Killing any old api.py, simulation_env.py or vLLM processes…"
+pkill -f 'python .*/api_server/api.py'            || true
+pkill -f 'python .*/env_setup/simulation_env.py'  || true
+pkill -f 'vllm\.entrypoints\.openai\.api_server'  || true
+
+# wait up to 5s for port 8001 to free
+for i in {1..10}; do
+  if ! ss -ltnp 2>/dev/null | grep -q ':8001'; then
+    break
+  fi
+  sleep 0.5
+done
 
 # -----------------------------------------------------------------------------
 # 2) Start the Flask API (api_server/api.py)
@@ -56,9 +36,9 @@ echo "→ Starting api.py…"
 pushd api_server >/dev/null
 python api.py &
 API_PID=$!
-popd  >/dev/null
+popd >/dev/null
 
-# wait for port 8000 to be listening (timeout after ~5s)
+# wait for port 8000 to be listening
 for i in {1..10}; do
   if ss -ltnp 2>/dev/null | grep -q ':8000'; then
     echo "→ api.py is up"
@@ -76,7 +56,6 @@ python simulation_env.py &
 SIM_PID=$!
 popd >/dev/null
 
-# give it a moment if needed
 sleep 1
 
 # -----------------------------------------------------------------------------
@@ -89,7 +68,7 @@ GRPO_EXIT=$?
 popd >/dev/null
 
 # -----------------------------------------------------------------------------
-# 5) On exit, kill API and sim (cleanup trap will also fire)
+# 5) On exit, kill API and sim (cleanup trap will also kill vLLM)
 # -----------------------------------------------------------------------------
 echo "→ grpo.py exited with code $GRPO_EXIT; shutting down background processes…"
 kill $API_PID $SIM_PID || true

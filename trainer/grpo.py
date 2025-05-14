@@ -189,7 +189,7 @@ def train(config: TrainingConfig):
     print(f"vLLM restart interval: {config.vllm_restart_interval} steps")
 
     os.makedirs(config.save_path, exist_ok=True)
-    register_trainer(config)
+    # register_trainer(config)
 
     vllm_command = [
         "python", "-m", "vllm.entrypoints.openai.api_server",
@@ -202,6 +202,13 @@ def train(config: TrainingConfig):
     client = None
     try:
         vllm_process = subprocess.Popen(vllm_command)
+        url = f"http://localhost:{config.vllm_port}/status"
+        while True:
+            response = requests.get(url)
+            if response.status_code == 200:
+                time.sleep(10)
+                break
+            time.sleep(5)
         print(f"vLLM server launched with PID: {vllm_process.pid}")
     except Exception as e:
         print(f"Error launching vLLM: {e}")
@@ -334,7 +341,7 @@ def train(config: TrainingConfig):
 
 if __name__ == "__main__":
     training_config = TrainingConfig(
-        model_name="Qwen/Qwen2.5-1.5B-Instruct",
+        model_name="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
         training_steps=20,
         vllm_restart_interval=3,
         api_port=8000,  # Add API port

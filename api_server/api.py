@@ -28,7 +28,6 @@ def start_collection():
     try:
         global should_collect, client
         should_collect = True
-        client = request.json.get('client')
         return jsonify({
                 "status": "success", 
                 "message": "Collection started",

@@ -37,6 +37,10 @@ class Reward_Scores(BaseModel):
 class Utterance_Scores(BaseModel):
         score: int
 
+class Sceanrio(BaseModel):
+        topic: str
+        key_points: List[str]
+
 class SimulationEnvironment(MyBaseEnv):
     def __init__(self, server_url: str, vllm_server_url: str, client=None):
         self.server_url = server_url
@@ -101,10 +105,11 @@ class SimulationEnvironment(MyBaseEnv):
                 You are the character 1. Respond with exactly what they should say in this scenario """
                 
                 response = self.client.chat.completions.create(
-                    model="DeepHermes-3-Llama-3-3B-Preview",
+                    model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                     messages=[{"role": "user", "content": char1_prompt}],
                     max_tokens=200,
-                    temperature=0.7
+                    temperature=0.7,
+                    response_model=str
                 )
                 conversation.append({"speaker": "character1", "text": response.choices[0].message.content})
 
@@ -114,10 +119,11 @@ class SimulationEnvironment(MyBaseEnv):
                 You are the character 2. Respond with exactly what they should say in this scenario."""
                 
                 response = self.client.chat.completions.create(
-                    model="DeepHermes-3-Llama-3-3B-Preview", 
+                    model="NousResearch/DeepHermes-3-Llama-3-3B-Preview", 
                     messages=[{"role": "user", "content": char2_prompt}],
                     max_tokens=200,
-                    temperature=0.7
+                    temperature=0.7,
+                    response_model=str
                 )
                 conversation.append({"speaker": "character2", "text": response.choices[0].message.content})
 
@@ -162,7 +168,7 @@ class SimulationEnvironment(MyBaseEnv):
         Respond with only the JSON."""
 
         response = self.client.chat.completions.create(
-            model="DeepHermes-3-Llama-3-3B-Preview",
+            model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": terminal_prompt}],
             max_tokens=500,
             temperature=0.3,
@@ -204,7 +210,7 @@ class SimulationEnvironment(MyBaseEnv):
             - score: The numerical score (0-10)
 """
             response = self.client.chat.completions.create(
-                model="DeepHermes-3-Llama-3-3B-Preview",
+                model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                 messages=[{"role": "user", "content": utterance_prompt}],
                 max_tokens=200,
                 temperature=0.3,
@@ -238,22 +244,25 @@ class SimulationEnvironment(MyBaseEnv):
 
         Format the response as a JSON with fields:
         - topic: The specific discussion topic
-        - rationale: Why this creates an interesting dynamic
         - key_points: List of 3-4 specific aspects to explore
 
         Return only the JSON."""
 
         response = self.client.chat.completions.create(
-            model="DeepHermes-3-Llama-3-3B-Preview",
+            model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.7,
-            top_p=0.9
+            top_p=0.9,
+            response_model=Sceanrio
         )
-        return response.choices[0].message.content.strip()
+        response_json = response.choices[0].message.content.strip()
+        response_topic = response_json.get("topic", "")
+        response_key_points= response_json.get("key_points", [])
+        return f"Scenario: {response_topic}, Key Points To Talk About: {response_key_points}"
+        return response_topic, response_key_points
 
     async def _generate_customer_scenario(self, persona):
-        print("PERSONA", persona)
         scenario = {
             "name": f"{persona['first_name']} {persona['last_name']}",
             "background": persona["generated_persona"],
@@ -292,11 +301,12 @@ class SimulationEnvironment(MyBaseEnv):
         the profile and nothign else."""
 
         response = self.client.chat.completions.create(
-            model="DeepHermes-3-Llama-3-3B-Preview",
+            model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=400,
             temperature=0.4,
-            top_p=0.9
+            top_p=0.9,
+            response_model=str
         )
         return response.choices[0].message.content.strip()
 
@@ -325,11 +335,12 @@ class SimulationEnvironment(MyBaseEnv):
         Make this profile extremely detailed and realistic. Based on this profile, one should be able to accurately predict and emulate how this character would behave and respond in various situations. Return the profile and nothing else."""
 
         response = self.client.chat.completions.create(
-            model="DeepHermes-3-Llama-3-3B-Preview",
+            model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=400,
             temperature=0.4,
-            top_p=0.9
+            top_p=0.9,
+            response_model=str
         )
         return response.choices[0].message.content.strip()
 
@@ -354,7 +365,32 @@ async def main():
         if not can_sample_value:
             await asyncio.sleep(10)
             continue
-        client = instructor.from_openai(OpenAI(base_url="http://localhost:8000/v1",api_key="ollama"),mode=instructor.Mode.JSON)
+        client = instructor.from_openai(OpenAI(base_url="http://localhost:8001",api_key="ollama"),mode=instructor.Mode.JSON)
+        try:
+            status_response = requests.get("http://localhost:8001/status", timeout=5)
+            if status_response.status_code == 200:
+                try:
+                    test_response = requests.post("http://localhost:8001/v1/completions", 
+                        json={
+                            "model": "NousResearch/DeepHermes-3-Llama-3-3B-Preview",
+                            "prompt": "Hello, how are you?",
+                            "max_tokens": 10
+                        },
+                        timeout=5
+                    )
+                    if test_response.status_code == 200:
+                        print("vLLM server can generate responses")
+                    else:
+                        print("vLLM server failed generation test ", test_response.status_code, test_response.text)
+                except requests.exceptions.RequestException:
+                    print("Could not test vLLM generation")
+                await asyncio.sleep(10)
+                continue
+            print("VLLM READY TO GO")
+        except requests.exceptions.RequestException:
+            print("Could not connect to vLLM server") 
+            await asyncio.sleep(10)
+            continue
         if client:
             env.client = client
         else: 
