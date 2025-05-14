@@ -196,7 +196,7 @@ def train(config: TrainingConfig):
         "--model", config.model_name,
         "--port", str(config.vllm_port),
         "--dtype", "auto",
-        "--gpu-memory-utilization", "0.45",
+        "--gpu-memory-utilization", "0.95",
         "--disable-log-requests",
     ]
     client = None
@@ -315,7 +315,7 @@ def train(config: TrainingConfig):
             "--model", checkpoint_path,
             "--port", str(config.vllm_port),
             "--dtype", "auto",
-            "--gpu-memory-utilization", "0.45",
+            "--gpu-memory-utilization", "0.95",
             "--disable-log-requests",
             "--served-model-name", config.model_name,
         ]

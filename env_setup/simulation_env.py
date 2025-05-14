@@ -40,6 +40,8 @@ class Utterance_Scores(BaseModel):
 class Sceanrio(BaseModel):
         topic: str
         key_points: List[str]
+class Str_Response(BaseModel):
+        response: str
 
 class SimulationEnvironment(MyBaseEnv):
     def __init__(self, server_url: str, vllm_server_url: str, client=None):
@@ -95,6 +97,7 @@ class SimulationEnvironment(MyBaseEnv):
     async def collect_trajectories(self, character1, character2) -> Tuple[any, List[any]]:
         all_conversations = []
         scenario = await self.generate_character_scenario(character1, character2)
+        print("SCENARIO GENERATED, length: ", len(scenario))
         for conversation_num in range(4):
             conversation = []
             samped_number = random.randint(5, 7)
@@ -102,30 +105,36 @@ class SimulationEnvironment(MyBaseEnv):
                 char1_prompt = f"""Given the scenario: {scenario}
                 And the conversation history: {conversation}
                 Generate the next response for character 1, given their description: {character1}. 
-                You are the character 1. Respond with exactly what they should say in this scenario """
+                You are the character 1. Respond with exactly what they should say in this scenario.
                 
+                Return a JSON with a single field:
+                - response: The exact response the character should say"""
+
                 response = self.client.chat.completions.create(
                     model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                     messages=[{"role": "user", "content": char1_prompt}],
-                    max_tokens=200,
+                    max_tokens=400,
                     temperature=0.7,
-                    response_model=str
+                    response_model=Str_Response
                 )
-                conversation.append({"speaker": "character1", "text": response.choices[0].message.content})
+                conversation.append({"speaker": "character1", "text": response.response })
 
                 char2_prompt = f"""Given the scenario: {scenario}
                 And the conversation history: {conversation}
                 Generate the next response for character 2, given their description: {character2}. 
-                You are the character 2. Respond with exactly what they should say in this scenario."""
+                You are the character 2. Respond with exactly what they should say in this scenario.
+                
+                Return a JSON with a single field:
+                - response: The exact response the character should say"""
                 
                 response = self.client.chat.completions.create(
                     model="NousResearch/DeepHermes-3-Llama-3-3B-Preview", 
                     messages=[{"role": "user", "content": char2_prompt}],
-                    max_tokens=200,
+                    max_tokens=400,
                     temperature=0.7,
-                    response_model=str
+                    response_model=Str_Response
                 )
-                conversation.append({"speaker": "character2", "text": response.choices[0].message.content})
+                conversation.append({"speaker": "character2", "text": response.response})
 
             all_conversations.append((scenario, character1, character2, conversation))
         final_output = []
@@ -170,11 +179,11 @@ class SimulationEnvironment(MyBaseEnv):
         response = self.client.chat.completions.create(
             model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": terminal_prompt}],
-            max_tokens=500,
+            max_tokens=1500,
             temperature=0.3,
             response_model=Reward_Scores,
         )
-        scores = response.choices[0].message.content
+        scores = response
 
         terminal_rewards = {
             "character1": {
@@ -190,12 +199,12 @@ class SimulationEnvironment(MyBaseEnv):
         }
         
         if scores:
-            terminal_rewards["character1"]["authenticity"] = scores.get("character1_authenticity", 0)
-            terminal_rewards["character1"]["engagement"] = scores.get("character1_engagement", 0)
-            terminal_rewards["character1"]["accuracy"] = scores.get("character1_accuracy", 0)
-            terminal_rewards["character2"]["authenticity"] = scores.get("character2_authenticity", 0)
-            terminal_rewards["character2"]["engagement"] = scores.get("character2_engagement", 0)
-            terminal_rewards["character2"]["accuracy"] = scores.get("character2_accuracy", 0)
+            terminal_rewards["character1"]["authenticity"] = scores.character1_authenticity
+            terminal_rewards["character1"]["engagement"] = scores.character1_engagement
+            terminal_rewards["character1"]["accuracy"] = scores.character1_accuracy
+            terminal_rewards["character2"]["authenticity"] = scores.character2_authenticity
+            terminal_rewards["character2"]["engagement"] = scores.character2_engagement
+            terminal_rewards["character2"]["accuracy"] = scores.character2_accuracy
 
         utterance_scores = []
         for utterance in conversation:
@@ -212,16 +221,16 @@ class SimulationEnvironment(MyBaseEnv):
             response = self.client.chat.completions.create(
                 model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                 messages=[{"role": "user", "content": utterance_prompt}],
-                max_tokens=200,
+                max_tokens=400,
                 temperature=0.3,
                 response_model=Utterance_Scores
             )
-            score_data = response.choices[0].message.content
+            score_data = response
             
             utterance_scores.append({
                 "speaker": utterance["speaker"],
-                "score": score_data.get("score", 0),
-                "feedback": score_data.get("feedback", "")
+                "score": score_data.score,
+                "feedback": score_data.feedback
             })
 
         return {
@@ -251,16 +260,15 @@ class SimulationEnvironment(MyBaseEnv):
         response = self.client.chat.completions.create(
             model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
+            max_tokens=2000,
             temperature=0.7,
             top_p=0.9,
             response_model=Sceanrio
         )
-        response_json = response.choices[0].message.content.strip()
-        response_topic = response_json.get("topic", "")
-        response_key_points= response_json.get("key_points", [])
+        response_json = response
+        response_topic = response_json.topic
+        response_key_points= response_json.key_points
         return f"Scenario: {response_topic}, Key Points To Talk About: {response_key_points}"
-        return response_topic, response_key_points
 
     async def _generate_customer_scenario(self, persona):
         scenario = {
@@ -288,7 +296,6 @@ class SimulationEnvironment(MyBaseEnv):
         Background: {persona['background']}
         Personality: {persona['personality']}
 
-
         Please generate a comprehensive profile that includes:
         1. Detailed personal history
         2. Current lifestyle
@@ -297,18 +304,20 @@ class SimulationEnvironment(MyBaseEnv):
         5. Emotional state and psychological profile
         6 Social Views and Beliefs
 
-        Make this profile extremely hyperealistic. Based on this profile I should be able to emualte how this personal woudl respond to people and events. Return 
-        the profile and nothign else."""
+        Make this profile extremely hyperealistic. Based on this profile I should be able to emualte how this personal woudl respond to people and events.
+        
+        Return a JSON with a single field:
+        - response: The detailed profile text"""
 
         response = self.client.chat.completions.create(
             model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=1500,
             temperature=0.4,
             top_p=0.9,
-            response_model=str
+            response_model=Str_Response
         )
-        return response.choices[0].message.content.strip()
+        return response.response
 
     async def _generate_character_scenario(self, character):
         scenario = {
@@ -332,17 +341,20 @@ class SimulationEnvironment(MyBaseEnv):
         6. Beliefs, values and worldview
         7. Typical behavioral patterns and reactions
 
-        Make this profile extremely detailed and realistic. Based on this profile, one should be able to accurately predict and emulate how this character would behave and respond in various situations. Return the profile and nothing else."""
+        Make this profile extremely detailed and realistic. Based on this profile, one should be able to accurately predict and emulate how this character would behave and respond in various situations.
+        
+        Return a JSON with a single field:
+        - response: The detailed character profile text"""
 
         response = self.client.chat.completions.create(
             model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=1500,
             temperature=0.4,
             top_p=0.9,
-            response_model=str
+            response_model=Str_Response
         )
-        return response.choices[0].message.content.strip()
+        return response.response
 
     async def __del__(self):
         if self.session:
@@ -365,32 +377,19 @@ async def main():
         if not can_sample_value:
             await asyncio.sleep(10)
             continue
-        try:
-            status_response = requests.get("http://localhost:8000/health", timeout=5)
-            if status_response.status_code == 200:
-                print("VLLM server GOOD TO GO")
-                try:
-                    test_response = requests.post("http://localhost:8000/v1", 
-                        json={
-                            "model": "NousResearch/DeepHermes-3-Llama-3-3B-Preview",
-                            "prompt": "Hello, how are you?",
-                            "max_tokens": 10
-                        },
-                        timeout=5
-                    )
-                    if test_response.status_code == 200:
-                        print("vLLM server can generate responses")
-                    else:
-                        print("vLLM server failed generation test ", test_response.status_code, test_response.text)
-                except requests.exceptions.RequestException:
-                    print("Could not test vLLM generation")
+        while True:
+            try:
+                status_response = requests.get("http://localhost:8000/health", timeout=5)
+                if status_response.status_code == 200:
+                    print("VLLM server GOOD TO GO")
+                    break
+                else:
+                    print("VLLM server NOT READY")
+                    await asyncio.sleep(10)
+            except requests.exceptions.RequestException:
+                print("Could not connect to vLLM server")
                 await asyncio.sleep(10)
                 continue
-            print("VLLM READY TO GO")
-        except requests.exceptions.RequestException:
-            print("Could not connect to vLLM server") 
-            await asyncio.sleep(10)
-            continue
         client = instructor.from_openai(OpenAI(base_url=env.vllm_server_url+"/v1",api_key="ollama"),mode=instructor.Mode.JSON)
 
         if client:
@@ -402,8 +401,10 @@ async def main():
         none_counter = 0
         exit_flag = False
         for _ in range(env.batch_size):
+            print("Getting next item")
             character_1 = await env.get_next_item()
             character_2 = await env.get_next_item()
+            print("GOTH BORTH CHARACTER")
             if character_1 or character_2 == '':
                 print("True exit flag")
                 exit_flag = True
