@@ -9,15 +9,16 @@ queue_lock = threading.Lock()
 should_collect = False 
 active_collection=False
 teardown_flag = False
-
+client = None
 @app.route('/setup', methods=['POST'])
 async def setup_env():
     try:
-        global queue, should_collect, active_collection, teardown_flag
+        global queue, should_collect, active_collection, teardown_flag, client
         should_collect = False
         active_collection = False
         teardown_flag = False
         queue = Queue() 
+        client = None
         return jsonify({"status": "success", "message": "Server setup complete"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -25,11 +26,12 @@ async def setup_env():
 @app.route('/start_collection', methods=['POST'])
 def start_collection():
     try:
-        global should_collect
+        global should_collect, client
         should_collect = True
+        client = request.json.get('client')
         return jsonify({
                 "status": "success", 
-                "message": "Collection started"
+                "message": "Collection started",
             })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -92,7 +94,8 @@ async def check_status_env():
         with queue_lock:
             return jsonify({
                 "can_sample": should_collect,  
-                "queue_size": queue.qsize()
+                "queue_size": queue.qsize(),
+                "client": client
             })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

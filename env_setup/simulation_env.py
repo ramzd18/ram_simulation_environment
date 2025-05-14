@@ -7,6 +7,10 @@ from abc import ABC, abstractmethod
 from typing import Optional, Tuple, List
 import requests
 import time
+import instructor
+from openai import OpenAI
+from pydantic import BaseModel
+
 class MyBaseEnv(ABC):
     @abstractmethod
     async def setup(self) -> None: ...
@@ -15,12 +19,29 @@ class MyBaseEnv(ABC):
     @abstractmethod
     async def collect_trajectories(self, item) -> List[Tuple[str, str, str, List[dict], dict]]: ...
     @abstractmethod
-    async def generate_rewards(self, conversation, character1, character2, scenario) -> dict: ...
+    def generate_rewards(self, conversation, character1, character2, scenario) -> dict: ...
+
+
+class RewardConfig(BaseModel):
+        terminal_rewards: dict
+        utterance_scores: list
+
+class Reward_Scores(BaseModel):
+        character1_authenticity: int
+        character1_engagement: int 
+        character1_accuracy: int
+        character2_authenticity: int
+        character2_engagement: int
+        character2_accuracy: int
+
+class Utterance_Scores(BaseModel):
+        score: int
 
 class SimulationEnvironment(MyBaseEnv):
-    def __init__(self, server_url: str, vllm_server_url: str):
+    def __init__(self, server_url: str, vllm_server_url: str, client=None):
         self.server_url = server_url
         self.vllm_server_url = vllm_server_url
+        self.client = client
         self.customer_personas = None
         self.character_codex = None
         # List[List[Tuple[str, str, str, List[dict], dict]]]        
@@ -67,7 +88,7 @@ class SimulationEnvironment(MyBaseEnv):
 
         return ""
 
-    async def collect_trajectories(self,character1, character2) -> Tuple[any, List[any]]:
+    async def collect_trajectories(self, character1, character2) -> Tuple[any, List[any]]:
         all_conversations = []
         scenario = await self.generate_character_scenario(character1, character2)
         for conversation_num in range(4):
@@ -76,47 +97,38 @@ class SimulationEnvironment(MyBaseEnv):
             for _ in range(samped_number):
                 char1_prompt = f"""Given the scenario: {scenario}
                 And the conversation history: {conversation}
-                Generate the next response for character 1: {character1}"""
+                Generate the next response for character 1, given their description: {character1}. 
+                You are the character 1. Respond with exactly what they should say in this scenario """
                 
-                async with self.session.post(
-                    f"{self.vllm_server_url}/generate",
-                    json={
-                        "prompt": char1_prompt,
-                        "max_tokens": 500,
-                        "temperature": 0.7
-                    }
-                ) as response:
-                    if response.status == 200:
-                        char1_response = await response.json()
-                        conversation.append({"speaker": "character1", "text": char1_response["text"]})
+                response = self.client.chat.completions.create(
+                    model="DeepHermes-3-Llama-3-3B-Preview",
+                    messages=[{"role": "user", "content": char1_prompt}],
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                conversation.append({"speaker": "character1", "text": response.choices[0].message.content})
 
                 char2_prompt = f"""Given the scenario: {scenario}
                 And the conversation history: {conversation}
-                Generate the next response for character 2: {character2}"""
+                Generate the next response for character 2, given their description: {character2}. 
+                You are the character 2. Respond with exactly what they should say in this scenario."""
                 
-                async with self.session.post(
-                    f"{self.vllm_server_url}/generate", 
-                    json={
-                        "prompt": char2_prompt,
-                        "max_tokens": 500,
-                        "temperature": 0.7
-                    }
-                ) as response:
-                    if response.status == 200:
-                        char2_response = await response.json()
-                        conversation.append({"speaker": "character2", "text": char2_response["text"]})
+                response = self.client.chat.completions.create(
+                    model="DeepHermes-3-Llama-3-3B-Preview", 
+                    messages=[{"role": "user", "content": char2_prompt}],
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                conversation.append({"speaker": "character2", "text": response.choices[0].message.content})
 
-            # Conversation is type List[dict]
             all_conversations.append((scenario, character1, character2, conversation))
-        final_output= []
-        for scenario,character1,character2, conversation in all_conversations:
-            rewards = await self.generate_rewards(conversation, character1, character2, scenario)
-            final_output.append((scenario,character1,character2, conversation, rewards))
-        # final_output is type List[Tuple[str, str, str, List[dict], List[dict]]]
+        final_output = []
+        for scenario, character1, character2, conversation in all_conversations:
+            rewards = self.generate_rewards(conversation, character1, character2, scenario)
+            final_output.append((scenario, character1, character2, conversation, rewards))
         self.current_batch.append(final_output)
         await self.check_batch()
         return final_output
-
 
     async def check_batch(self): 
         if len(self.current_batch) >= self.batch_size:
@@ -128,10 +140,7 @@ class SimulationEnvironment(MyBaseEnv):
                     raise Exception("Failed to collect batch")
             self.current_batch = []
 
-    
-
-    async def generate_rewards(self, conversation, character1, character2, scenario):
-        # Generate terminal rewards for each character
+    def generate_rewards(self, conversation, character1, character2, scenario):
         terminal_prompt = f"""Given this conversation: {conversation}
         And this scenario: {scenario}
         And these characters:
@@ -149,41 +158,39 @@ class SimulationEnvironment(MyBaseEnv):
         - character1_accuracy: Score for character 1's accuracy (0-30)
         - character2_authenticity: Score for character 2's authenticity (0-40)
         - character2_engagement: Score for character 2's engagement (0-30) 
-        - character2_accuracy: Score for character 2's accuracy (0-30)
-        - character1_feedback: Brief explanation of character 1's scores
-        - character2_feedback: Brief explanation of character 2's scores"""
+        - character2_accuracy: Score for character 2's accuracy (0-30). 
+        Respond with only the JSON."""
 
-        async with self.session.post(
-            f"{self.vllm_server_url}/generate",
-            json={
-                "prompt": terminal_prompt,
-                "max_tokens": 500,
-                "temperature": 0.3
-            }
-        ) as response:
-            terminal_rewards = {
-                "character1": {
-                    "authenticity": 0,
-                    "engagement": 0,
-                    "accuracy": 0
-                },
-                "character2": {
-                    "authenticity": 0,
-                    "engagement": 0,
-                    "accuracy": 0
-                }
-            }
-            if response.status == 200:
-                result = await response.json()
-                scores = result.get("text", {})
-                terminal_rewards["character1"]["authenticity"] = scores.get("character1_authenticity", 0)
-                terminal_rewards["character1"]["engagement"] = scores.get("character1_engagement", 0)
-                terminal_rewards["character1"]["accuracy"] = scores.get("character1_accuracy", 0)
-                terminal_rewards["character2"]["authenticity"] = scores.get("character2_authenticity", 0)
-                terminal_rewards["character2"]["engagement"] = scores.get("character2_engagement", 0)
-                terminal_rewards["character2"]["accuracy"] = scores.get("character2_accuracy", 0)
+        response = self.client.chat.completions.create(
+            model="DeepHermes-3-Llama-3-3B-Preview",
+            messages=[{"role": "user", "content": terminal_prompt}],
+            max_tokens=500,
+            temperature=0.3,
+            response_model=Reward_Scores,
+        )
+        scores = response.choices[0].message.content
 
-        # Generate per-utterance scores
+        terminal_rewards = {
+            "character1": {
+                "authenticity": 0,
+                "engagement": 0,
+                "accuracy": 0
+            },
+            "character2": {
+                "authenticity": 0,
+                "engagement": 0,
+                "accuracy": 0
+            }
+        }
+        
+        if scores:
+            terminal_rewards["character1"]["authenticity"] = scores.get("character1_authenticity", 0)
+            terminal_rewards["character1"]["engagement"] = scores.get("character1_engagement", 0)
+            terminal_rewards["character1"]["accuracy"] = scores.get("character1_accuracy", 0)
+            terminal_rewards["character2"]["authenticity"] = scores.get("character2_authenticity", 0)
+            terminal_rewards["character2"]["engagement"] = scores.get("character2_engagement", 0)
+            terminal_rewards["character2"]["accuracy"] = scores.get("character2_accuracy", 0)
+
         utterance_scores = []
         for utterance in conversation:
             utterance_prompt = f"""Given this conversation utterance: {utterance}
@@ -195,38 +202,28 @@ class SimulationEnvironment(MyBaseEnv):
 
             Return only a JSON with fields:
             - score: The numerical score (0-10)
-            - feedback: Brief explanation of score"""
-
-            async with self.session.post(
-                f"{self.vllm_server_url}/generate",
-                json={
-                    "prompt": utterance_prompt,
-                    "max_tokens": 200,
-                    "temperature": 0.3
-                }
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    score_data = result.get("text", {})
-                    utterance_scores.append({
-                        "speaker": utterance["speaker"],
-                        "score": score_data.get("score", 0),
-                        "feedback": score_data.get("feedback", "")
-                    })
-                else:
-                    utterance_scores.append({
-                        "speaker": utterance["speaker"],
-                        "score": 0,
-                        "feedback": "Failed to generate score"
-                    })
+"""
+            response = self.client.chat.completions.create(
+                model="DeepHermes-3-Llama-3-3B-Preview",
+                messages=[{"role": "user", "content": utterance_prompt}],
+                max_tokens=200,
+                temperature=0.3,
+                response_model=Utterance_Scores
+            )
+            score_data = response.choices[0].message.content
+            
+            utterance_scores.append({
+                "speaker": utterance["speaker"],
+                "score": score_data.get("score", 0),
+                "feedback": score_data.get("feedback", "")
+            })
 
         return {
             "terminal_rewards": terminal_rewards,
             "utterance_scores": utterance_scores
         }
         
-    # TODO: Wrap this in an instructor call to get valid json
-    async def generate_character_scenario(self,character1, character2): 
+    async def generate_character_scenario(self, character1, character2): 
         prompt = f"""Given these two characters, suggest a specific, focused topic for them to have an in-depth discussion about. 
         The topic should be concrete and specific (not broad like "politics" or "science"), and could be something that neither character is an expert in.
         Consider their backgrounds, expertise, and potential points of view.
@@ -246,21 +243,14 @@ class SimulationEnvironment(MyBaseEnv):
 
         Return only the JSON."""
 
-        async with self.session.post(
-            f"{self.vllm_server_url}/generate",
-            json={
-                "prompt": prompt,
-                "max_tokens": 500,
-                "temperature": 0.7,
-                "top_p": 0.9
-            }
-        ) as response:
-            if response.status == 200:
-                result = await response.json()
-                discussion_scenario = result.get("text", "").strip()
-                return discussion_scenario
-            return None
-
+        response = self.client.chat.completions.create(
+            model="DeepHermes-3-Llama-3-3B-Preview",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.7,
+            top_p=0.9
+        )
+        return response.choices[0].message.content.strip()
 
     async def _generate_customer_scenario(self, persona):
         print("PERSONA", persona)
@@ -277,16 +267,18 @@ class SimulationEnvironment(MyBaseEnv):
         return  await self.enrich_customer_persona(scenario)
     
     async def enrich_customer_persona(self, persona):
-        # Prepare the prompt for vLLM to generate a hyperrealistic profile
         prompt = f"""Given the following basic customer information, create an extremely detailed and hyperrealistic profile that makes this person feel like a real human being. Include specific details, quirks, and realistic life experiences that would make sense for someone with this background.
 
         Basic Information:
-        Name: {persona['first_name']} {persona['last_name']}
+        Name: {persona['name']} 
         Age Range: {persona['age_range']}
         Job Title: {persona['job_title']}
         Location: {persona['location']}
         Current State of Mind: {persona['state_of_mind']}
         Interests: {', '.join(persona['interests'])}
+        Background: {persona['background']}
+        Personality: {persona['personality']}
+
 
         Please generate a comprehensive profile that includes:
         1. Detailed personal history
@@ -299,19 +291,14 @@ class SimulationEnvironment(MyBaseEnv):
         Make this profile extremely hyperealistic. Based on this profile I should be able to emualte how this personal woudl respond to people and events. Return 
         the profile and nothign else."""
 
-        async with self.session.post(
-            f"{self.vllm_server_url}/generate",
-            json={
-                "prompt": prompt,
-                "max_tokens": 1000,
-                "temperature": 0.4,
-                "top_p": 0.9
-            }
-        ) as response:
-            if response.status == 200:
-                result = await response.json()
-                enriched_profile = result.get("text", "").strip()
-                return enriched_profile
+        response = self.client.chat.completions.create(
+            model="DeepHermes-3-Llama-3-3B-Preview",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.4,
+            top_p=0.9
+        )
+        return response.choices[0].message.content.strip()
 
     async def _generate_character_scenario(self, character):
         scenario = {
@@ -320,7 +307,6 @@ class SimulationEnvironment(MyBaseEnv):
         }
         return await self.enrich_character_scenario(scenario)
     async def enrich_character_scenario(self, character):
-        # Prepare the prompt for vLLM to generate a detailed character profile
         prompt = f"""Given the following basic character information, create an extremely detailed and rich character profile that makes this character feel like a real person. Include specific details about their personality, motivations, and background that would influence how they interact with others.
 
         Basic Information:
@@ -338,19 +324,14 @@ class SimulationEnvironment(MyBaseEnv):
 
         Make this profile extremely detailed and realistic. Based on this profile, one should be able to accurately predict and emulate how this character would behave and respond in various situations. Return the profile and nothing else."""
 
-        async with self.session.post(
-            f"{self.vllm_server_url}/generate",
-            json={
-                "prompt": prompt,
-                "max_tokens": 1000,
-                "temperature": 0.4,
-                "top_p": 0.9
-            }
-        ) as response:
-            if response.status == 200:
-                result = await response.json()
-                enriched_profile = result.get("text", "").strip()
-                return enriched_profile
+        response = self.client.chat.completions.create(
+            model="DeepHermes-3-Llama-3-3B-Preview",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.4,
+            top_p=0.9
+        )
+        return response.choices[0].message.content.strip()
 
     async def __del__(self):
         if self.session:
@@ -369,27 +350,34 @@ async def main():
     print("Setup complete")
     while True:
         can_sample = await env.check_status_env()
-        can_sample_value = False 
         can_sample_value = can_sample.get('can_sample', False)
         if not can_sample_value:
             await asyncio.sleep(10)
             continue
-        none_counter=0
-        exit_flag= False
+        client = instructor.from_openai(OpenAI(base_url="http://localhost:8000/v1",api_key="ollama"),mode=instructor.Mode.JSON)
+        if client:
+            env.client = client
+        else: 
+            print("Failed to setup client")
+            await asyncio.sleep(10)
+            continue
+        none_counter = 0
+        exit_flag = False
         for _ in range(env.batch_size):
             character_1 = await env.get_next_item()
             character_2 = await env.get_next_item()
             if character_1 or character_2 == '':
-                exit_flag= True
+                print("True exit flag")
+                exit_flag = True
                 break
             if character_1 and character_2 is None: 
-                none_counter+=1
+                none_counter += 1
                 if none_counter > 10: 
-                    exit_flag= True
+                    exit_flag = True
                     break
                 continue
             else: 
-                none_counter=0
+                none_counter = 0
         if exit_flag:
             break
         await env.collect_trajectories(character_1, character_2)

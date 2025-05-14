@@ -9,7 +9,7 @@ import subprocess
 import time
 from typing import List, Optional, Tuple
 import instructor
-from instructor import OpenAI
+from openai import OpenAI
 
 import numpy as np
 import requests
@@ -199,11 +199,10 @@ def train(config: TrainingConfig):
         "--gpu-memory-utilization", "0.45",
         "--disable-log-requests",
     ]
-    
+    client = None
     try:
         vllm_process = subprocess.Popen(vllm_command)
         print(f"vLLM server launched with PID: {vllm_process.pid}")
-        client = instructor.from_openai(OpenAI(base_url="http://localhost:8000/v1",api_key="ollama"))
     except Exception as e:
         print(f"Error launching vLLM: {e}")
         config.vllm_restart_interval = config.training_steps + 1
@@ -284,6 +283,7 @@ def train(config: TrainingConfig):
             f"http://localhost:{config.api_port}/reload",
             timeout=10
         )
+        
         if response.status_code != 200:
             print(f"Warning: Failed to notify API about model reload: {response.text}")
         
