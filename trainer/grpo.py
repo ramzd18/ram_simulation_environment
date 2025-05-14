@@ -8,6 +8,8 @@ import string
 import subprocess
 import time
 from typing import List, Optional, Tuple
+import instructor
+from instructor import OpenAI
 
 import numpy as np
 import requests
@@ -201,6 +203,7 @@ def train(config: TrainingConfig):
     try:
         vllm_process = subprocess.Popen(vllm_command)
         print(f"vLLM server launched with PID: {vllm_process.pid}")
+        client = instructor.from_openai(OpenAI(base_url="http://localhost:8000/v1",api_key="ollama"))
     except Exception as e:
         print(f"Error launching vLLM: {e}")
         config.vllm_restart_interval = config.training_steps + 1

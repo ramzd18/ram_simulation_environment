@@ -263,6 +263,7 @@ class SimulationEnvironment(MyBaseEnv):
 
 
     async def _generate_customer_scenario(self, persona):
+        print("PERSONA", persona)
         scenario = {
             "name": f"{persona['first_name']} {persona['last_name']}",
             "background": persona["generated_persona"],
