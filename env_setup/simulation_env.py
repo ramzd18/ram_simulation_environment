@@ -113,7 +113,7 @@ class SimulationEnvironment(MyBaseEnv):
                 response = self.client.chat.completions.create(
                     model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                     messages=[{"role": "user", "content": char1_prompt}],
-                    max_tokens=400,
+                    max_tokens=700,
                     temperature=0.7,
                     response_model=Str_Response
                 )
@@ -130,7 +130,7 @@ class SimulationEnvironment(MyBaseEnv):
                 response = self.client.chat.completions.create(
                     model="NousResearch/DeepHermes-3-Llama-3-3B-Preview", 
                     messages=[{"role": "user", "content": char2_prompt}],
-                    max_tokens=400,
+                    max_tokens=700,
                     temperature=0.7,
                     response_model=Str_Response
                 )
@@ -141,6 +141,8 @@ class SimulationEnvironment(MyBaseEnv):
         for scenario, character1, character2, conversation in all_conversations:
             rewards = self.generate_rewards(conversation, character1, character2, scenario)
             final_output.append((scenario, character1, character2, conversation, rewards))
+            print("FINAL OUTPUT APPENDED")
+            print("REWARDS: ", rewards)
         self.current_batch.append(final_output)
         await self.check_batch()
         return final_output
@@ -221,7 +223,7 @@ class SimulationEnvironment(MyBaseEnv):
             response = self.client.chat.completions.create(
                 model="NousResearch/DeepHermes-3-Llama-3-3B-Preview",
                 messages=[{"role": "user", "content": utterance_prompt}],
-                max_tokens=400,
+                max_tokens=700,
                 temperature=0.3,
                 response_model=Utterance_Scores
             )
@@ -230,7 +232,6 @@ class SimulationEnvironment(MyBaseEnv):
             utterance_scores.append({
                 "speaker": utterance["speaker"],
                 "score": score_data.score,
-                "feedback": score_data.feedback
             })
 
         return {
@@ -405,11 +406,13 @@ async def main():
             character_1 = await env.get_next_item()
             character_2 = await env.get_next_item()
             print("GOTH BORTH CHARACTER")
-            if character_1 or character_2 == '':
+            print("Character 1: ", character_1)
+            print("Character 2: ", character_2)
+            if character_1 == '' or character_2 == '':
                 print("True exit flag")
                 exit_flag = True
                 break
-            if character_1 and character_2 is None: 
+            if character_1 is None or  character_2 is None: 
                 none_counter += 1
                 if none_counter > 10: 
                     exit_flag = True
@@ -417,9 +420,9 @@ async def main():
                 continue
             else: 
                 none_counter = 0
+            await env.collect_trajectories(character_1, character_2)
         if exit_flag:
             break
-        await env.collect_trajectories(character_1, character_2)
     requests.post(f"{env.server_url}/notify_teardown", timeout=10)
     print("DONE")
 
